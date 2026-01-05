@@ -34,8 +34,14 @@ python scripts/install_extension.py
 ### 3. MCPサーバーのインストール
 
 ```bash
-uv sync
+uv tool install --editable .
+uv tool update-shell  # PATHに追加
 ```
+
+シェルを再起動すると `renderdoc-mcp` コマンドが使えるようになる。
+
+> **Note**: `--editable` を付けると、ソースコードの変更が即座に反映される（開発時に便利）。
+> 安定版としてインストールする場合は `uv tool install .` を使用。
 
 ### 4. MCPクライアントの設定
 
@@ -47,8 +53,7 @@ uv sync
 {
   "mcpServers": {
     "renderdoc": {
-      "command": "uv",
-      "args": ["run", "renderdoc-mcp"]
+      "command": "renderdoc-mcp"
     }
   }
 }
@@ -62,8 +67,7 @@ uv sync
 {
   "mcpServers": {
     "renderdoc": {
-      "command": "uv",
-      "args": ["run", "renderdoc-mcp"]
+      "command": "renderdoc-mcp"
     }
   }
 }

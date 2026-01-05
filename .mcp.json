@@ -1,8 +1,7 @@
 {
   "mcpServers": {
     "renderdoc": {
-      "command": "uv",
-      "args": ["run", "renderdoc-mcp"]
+      "command": "renderdoc-mcp"
     }
   }
 }
