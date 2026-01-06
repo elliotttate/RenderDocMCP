@@ -217,34 +217,47 @@ class RenderDocFacade:
 
         def callback(controller):
             try:
-                rid = self._parse_resource_id(resource_id)
-            except Exception:
-                result["error"] = "Invalid resource ID: %s" % resource_id
-                return
+                # Extract numeric ID from resource_id string
+                if "::" in resource_id:
+                    target_id = int(resource_id.split("::")[-1])
+                else:
+                    target_id = int(resource_id)
 
-            # Find texture
-            tex_desc = None
-            for tex in controller.GetTextures():
-                if tex.resourceId == rid:
-                    tex_desc = tex
-                    break
+                # Find texture by comparing resource IDs
+                tex_desc = None
+                textures = controller.GetTextures()
 
-            if not tex_desc:
-                result["error"] = "Texture not found: %s" % resource_id
-                return
+                for tex in textures:
+                    # Extract numeric ID from texture's resourceId string
+                    tex_id_str = str(tex.resourceId)
+                    if "::" in tex_id_str:
+                        tex_id = int(tex_id_str.split("::")[-1])
+                    else:
+                        tex_id = int(tex_id_str)
 
-            result["texture"] = {
-                "resource_id": resource_id,
-                "width": tex_desc.width,
-                "height": tex_desc.height,
-                "depth": tex_desc.depth,
-                "array_size": tex_desc.arraysize,
-                "mip_levels": tex_desc.mips,
-                "format": str(tex_desc.format.Name()),
-                "dimension": str(tex_desc.type),
-                "msaa_samples": tex_desc.msSamp,
-                "byte_size": tex_desc.byteSize,
-            }
+                    if tex_id == target_id:
+                        tex_desc = tex
+                        break
+
+                if not tex_desc:
+                    result["error"] = "Texture not found: %s" % resource_id
+                    return
+
+                result["texture"] = {
+                    "resource_id": resource_id,
+                    "width": tex_desc.width,
+                    "height": tex_desc.height,
+                    "depth": tex_desc.depth,
+                    "array_size": tex_desc.arraysize,
+                    "mip_levels": tex_desc.mips,
+                    "format": str(tex_desc.format.Name()),
+                    "dimension": str(tex_desc.type),
+                    "msaa_samples": tex_desc.msSamp,
+                    "byte_size": tex_desc.byteSize,
+                }
+            except Exception as e:
+                import traceback
+                result["error"] = "Error: %s\n%s" % (str(e), traceback.format_exc())
 
         self._invoke(callback)
 
@@ -275,15 +288,25 @@ class RenderDocFacade:
 
         def callback(controller):
             try:
-                rid = self._parse_resource_id(resource_id)
+                # Extract numeric ID from resource_id string
+                if "::" in resource_id:
+                    target_id = int(resource_id.split("::")[-1])
+                else:
+                    target_id = int(resource_id)
             except Exception:
                 result["error"] = "Invalid resource ID: %s" % resource_id
                 return
 
-            # Find texture to get metadata
+            # Find texture to get metadata by comparing resource IDs
             tex_desc = None
             for tex in controller.GetTextures():
-                if tex.resourceId == rid:
+                tex_id_str = str(tex.resourceId)
+                if "::" in tex_id_str:
+                    tex_id = int(tex_id_str.split("::")[-1])
+                else:
+                    tex_id = int(tex_id_str)
+
+                if tex_id == target_id:
                     tex_desc = tex
                     break
 
@@ -345,7 +368,7 @@ class RenderDocFacade:
 
             # Get texture data
             try:
-                data = controller.GetTextureData(rid, sub)
+                data = controller.GetTextureData(tex_desc.resourceId, sub)
             except Exception as e:
                 result["error"] = "Failed to get texture data: %s" % str(e)
                 return
