@@ -11,9 +11,9 @@ Claude/AI Client (stdio)
         │
         ▼
 MCP Server Process (標準Python + FastMCP 2.0)
-        │ TCP Socket (127.0.0.1:19876)
+        │ File-based IPC (%TEMP%/renderdoc_mcp/)
         ▼
-RenderDoc Process (Extension + Socket Server)
+RenderDoc Process (Extension + File Polling)
 ```
 
 ## プロジェクト構成
@@ -24,12 +24,12 @@ RenderDocMCP/
 │   ├── server.py                      # FastMCPエントリーポイント
 │   ├── config.py                      # 設定
 │   └── bridge/
-│       └── client.py                  # Socket通信クライアント
+│       └── client.py                  # ファイルベースIPCクライアント
 │
 ├── renderdoc_extension/               # RenderDoc拡張機能
 │   ├── __init__.py                    # register()/unregister()
 │   ├── extension.json                 # マニフェスト
-│   ├── socket_server.py               # TCPソケットサーバー
+│   ├── socket_server.py               # ファイルベースIPCサーバー
 │   ├── request_handler.py             # リクエスト処理
 │   └── renderdoc_facade.py            # RenderDoc APIラッパー
 │
@@ -51,13 +51,18 @@ RenderDocMCP/
 
 ## 通信プロトコル
 
-`[4バイト長さ (big-endian)][JSON]`
+ファイルベースIPC:
+- IPCディレクトリ: `%TEMP%/renderdoc_mcp/`
+- `request.json`: リクエスト（MCPサーバー → RenderDoc）
+- `response.json`: レスポンス（RenderDoc → MCPサーバー）
+- `lock`: 書き込み中ロックファイル
+- ポーリング間隔: 100ms（RenderDoc側）
 
 ## 開発ノート
 
+- RenderDoc内蔵Pythonにはsocket/QtNetworkモジュールがないため、ファイルベースIPCを採用
 - RenderDoc拡張機能はPython 3.6標準ライブラリのみ使用
 - ReplayControllerへのアクセスは`BlockInvoke`経由で行う
-- ソケットは127.0.0.1のみバインド（セキュリティ）
 
 ## 参考リンク
 

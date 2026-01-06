@@ -1,6 +1,6 @@
 # RenderDoc MCP Server
 
-RenderDoc UI拡張機能として動作するMCPサーバー。AIアシスタントがRenderDocのキャプチャデータにアクセスし、DirectX 11/12のグラフィックスデバッグを支援する。
+RenderDoc UI拡張機能として動作するMCPサーバー。AIアシスタントがRenderDocのキャプチャデータにアクセスし、グラフィックスデバッグを支援する。
 
 ## アーキテクチャ
 
@@ -9,10 +9,12 @@ Claude/AI Client (stdio)
         │
         ▼
 MCP Server Process (Python + FastMCP 2.0)
-        │ TCP Socket (127.0.0.1:19876)
+        │ File-based IPC (%TEMP%/renderdoc_mcp/)
         ▼
 RenderDoc Process (Extension)
 ```
+
+RenderDoc内蔵のPythonにはsocketモジュールがないため、ファイルベースのIPCで通信を行う。
 
 ## セットアップ
 
@@ -29,12 +31,11 @@ python scripts/install_extension.py
 1. RenderDocを起動
 2. Tools > Manage Extensions
 3. "RenderDoc MCP Bridge" を有効化
-4. RenderDocを再起動
 
 ### 3. MCPサーバーのインストール
 
 ```bash
-uv tool install --editable .
+uv tool install
 uv tool update-shell  # PATHに追加
 ```
 
@@ -110,19 +111,14 @@ get_shader_info(event_id=123, stage="pixel")
 get_pipeline_state(event_id=123)
 ```
 
-## 環境変数
-
-| 変数名 | デフォルト値 | 説明 |
-|--------|-------------|------|
-| `RENDERDOC_MCP_HOST` | `127.0.0.1` | RenderDoc拡張機能のホスト |
-| `RENDERDOC_MCP_PORT` | `19876` | RenderDoc拡張機能のポート |
-
 ## 要件
 
 - Python 3.10+
 - [uv](https://docs.astral.sh/uv/)
 - RenderDoc 1.20+
-- Windows (DirectX 11/12対象)
+
+> **Note**: 動作確認はWindows + DirectX 11環境でのみ行っています。
+> Linux/macOS + Vulkan/OpenGL環境でも動作する可能性がありますが、未検証です。
 
 ## ライセンス
 
