@@ -4,5 +4,18 @@
             "Bash(python scripts/install_extension.py)",
             "mcp__renderdoc"
         ]
+    },
+    "hooks": {
+        "PostToolUse": [
+            {
+                "matcher": "Edit|Write",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python -c \"import json,sys; d=json.load(sys.stdin); p=d.get('tool_input',{}).get('file_path',''); exit(0 if 'renderdoc_extension' in p else 1)\" && python scripts/install_extension.py"
+                    }
+                ]
+            }
+        ]
     }
 }

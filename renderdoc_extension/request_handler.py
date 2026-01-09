@@ -15,6 +15,10 @@ class RequestHandler:
             "ping": self._handle_ping,
             "get_capture_status": self._handle_get_capture_status,
             "get_draw_calls": self._handle_get_draw_calls,
+            "get_frame_summary": self._handle_get_frame_summary,
+            "find_draws_by_shader": self._handle_find_draws_by_shader,
+            "find_draws_by_texture": self._handle_find_draws_by_texture,
+            "find_draws_by_resource": self._handle_find_draws_by_resource,
             "get_draw_call_details": self._handle_get_draw_call_details,
             "get_shader_info": self._handle_get_shader_info,
             "get_buffer_contents": self._handle_get_buffer_contents,
@@ -59,7 +63,47 @@ class RequestHandler:
     def _handle_get_draw_calls(self, params):
         """Handle get_draw_calls request"""
         include_children = params.get("include_children", True)
-        return self.facade.get_draw_calls(include_children)
+        marker_filter = params.get("marker_filter")
+        exclude_markers = params.get("exclude_markers")
+        event_id_min = params.get("event_id_min")
+        event_id_max = params.get("event_id_max")
+        only_actions = params.get("only_actions", False)
+        flags_filter = params.get("flags_filter")
+        return self.facade.get_draw_calls(
+            include_children=include_children,
+            marker_filter=marker_filter,
+            exclude_markers=exclude_markers,
+            event_id_min=event_id_min,
+            event_id_max=event_id_max,
+            only_actions=only_actions,
+            flags_filter=flags_filter,
+        )
+
+    def _handle_get_frame_summary(self, params):
+        """Handle get_frame_summary request"""
+        return self.facade.get_frame_summary()
+
+    def _handle_find_draws_by_shader(self, params):
+        """Handle find_draws_by_shader request"""
+        shader_name = params.get("shader_name")
+        if shader_name is None:
+            raise ValueError("shader_name is required")
+        stage = params.get("stage")
+        return self.facade.find_draws_by_shader(shader_name, stage)
+
+    def _handle_find_draws_by_texture(self, params):
+        """Handle find_draws_by_texture request"""
+        texture_name = params.get("texture_name")
+        if texture_name is None:
+            raise ValueError("texture_name is required")
+        return self.facade.find_draws_by_texture(texture_name)
+
+    def _handle_find_draws_by_resource(self, params):
+        """Handle find_draws_by_resource request"""
+        resource_id = params.get("resource_id")
+        if resource_id is None:
+            raise ValueError("resource_id is required")
+        return self.facade.find_draws_by_resource(resource_id)
 
     def _handle_get_draw_call_details(self, params):
         """Handle get_draw_call_details request"""

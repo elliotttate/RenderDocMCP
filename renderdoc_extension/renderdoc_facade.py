@@ -45,8 +45,28 @@ class RenderDocFacade:
         self._invoke(callback)
         return result
 
-    def get_draw_calls(self, include_children=True):
-        """Get all draw calls/actions in the capture"""
+    def get_draw_calls(
+        self,
+        include_children=True,
+        marker_filter=None,
+        exclude_markers=None,
+        event_id_min=None,
+        event_id_max=None,
+        only_actions=False,
+        flags_filter=None,
+    ):
+        """
+        Get all draw calls/actions in the capture with optional filtering.
+
+        Args:
+            include_children: Include child actions in the hierarchy (default: True)
+            marker_filter: Only include actions under markers containing this string (partial match)
+            exclude_markers: Exclude actions under markers containing these strings (list of partial matches)
+            event_id_min: Only include actions with event_id >= this value
+            event_id_max: Only include actions with event_id <= this value
+            only_actions: If True, exclude marker actions (PushMarker/PopMarker/SetMarker)
+            flags_filter: Only include actions with these flags (list of flag names, e.g. ["Drawcall", "Dispatch"])
+        """
         if not self.ctx.IsCaptureLoaded():
             raise ValueError("No capture loaded")
 
@@ -56,10 +76,418 @@ class RenderDocFacade:
             root_actions = controller.GetRootActions()
             structured_file = controller.GetStructuredFile()
             result["actions"] = self._serialize_actions(
-                root_actions, structured_file, include_children
+                root_actions,
+                structured_file,
+                include_children,
+                marker_filter=marker_filter,
+                exclude_markers=exclude_markers,
+                event_id_min=event_id_min,
+                event_id_max=event_id_max,
+                only_actions=only_actions,
+                flags_filter=flags_filter,
             )
 
         self._invoke(callback)
+        return result
+
+    def get_frame_summary(self):
+        """
+        Get a summary of the current capture frame.
+
+        Returns statistics about the frame including:
+        - Total action count
+        - Draw call count
+        - Dispatch count
+        - Clear count
+        - Top-level markers
+        - Resource counts
+        """
+        if not self.ctx.IsCaptureLoaded():
+            raise ValueError("No capture loaded")
+
+        result = {"summary": None}
+
+        def callback(controller):
+            root_actions = controller.GetRootActions()
+            structured_file = controller.GetStructuredFile()
+            api = controller.GetAPIProperties().pipelineType
+
+            # Statistics counters
+            stats = {
+                "draw_calls": 0,
+                "dispatches": 0,
+                "clears": 0,
+                "copies": 0,
+                "presents": 0,
+                "markers": 0,
+            }
+            total_actions = [0]  # Use list to allow modification in nested function
+
+            def count_actions(actions):
+                for action in actions:
+                    total_actions[0] += 1
+                    flags = action.flags
+
+                    if flags & rd.ActionFlags.Drawcall:
+                        stats["draw_calls"] += 1
+                    if flags & rd.ActionFlags.Dispatch:
+                        stats["dispatches"] += 1
+                    if flags & rd.ActionFlags.Clear:
+                        stats["clears"] += 1
+                    if flags & rd.ActionFlags.Copy:
+                        stats["copies"] += 1
+                    if flags & rd.ActionFlags.Present:
+                        stats["presents"] += 1
+                    if flags & (rd.ActionFlags.PushMarker | rd.ActionFlags.SetMarker):
+                        stats["markers"] += 1
+
+                    if action.children:
+                        count_actions(action.children)
+
+            count_actions(root_actions)
+
+            # Top-level markers
+            top_markers = []
+            for action in root_actions:
+                if action.flags & rd.ActionFlags.PushMarker:
+                    child_count = self._count_children(action)
+                    top_markers.append({
+                        "name": action.GetName(structured_file),
+                        "event_id": action.eventId,
+                        "child_count": child_count,
+                    })
+
+            # Resource counts
+            textures = controller.GetTextures()
+            buffers = controller.GetBuffers()
+
+            result["summary"] = {
+                "api": str(api),
+                "total_actions": total_actions[0],
+                "statistics": stats,
+                "top_level_markers": top_markers,
+                "resource_counts": {
+                    "textures": len(textures),
+                    "buffers": len(buffers),
+                },
+            }
+
+        self._invoke(callback)
+        return result["summary"]
+
+    def _count_children(self, action):
+        """Count total number of children recursively"""
+        count = 0
+        if action.children:
+            for child in action.children:
+                count += 1
+                count += self._count_children(child)
+        return count
+
+    def _flatten_actions(self, actions):
+        """Flatten hierarchical actions to a list"""
+        flat = []
+        for action in actions:
+            flat.append(action)
+            if action.children:
+                flat.extend(self._flatten_actions(action.children))
+        return flat
+
+    def find_draws_by_shader(self, shader_name, stage=None):
+        """
+        Find all draw calls using a shader with the given name (partial match).
+
+        Args:
+            shader_name: Partial name to search for in shader names
+            stage: Optional shader stage to search ("vertex", "pixel", etc.)
+        """
+        if not self.ctx.IsCaptureLoaded():
+            raise ValueError("No capture loaded")
+
+        result = {"matches": [], "scanned_draws": 0}
+
+        def callback(controller):
+            root_actions = controller.GetRootActions()
+            structured_file = controller.GetStructuredFile()
+            all_actions = self._flatten_actions(root_actions)
+
+            # Filter to only draw calls and dispatches
+            draw_actions = [
+                a for a in all_actions
+                if a.flags & (rd.ActionFlags.Drawcall | rd.ActionFlags.Dispatch)
+            ]
+            result["scanned_draws"] = len(draw_actions)
+
+            # Determine which stages to check
+            if stage:
+                stages_to_check = [self._parse_stage(stage)]
+            else:
+                stages_to_check = [
+                    rd.ShaderStage.Vertex,
+                    rd.ShaderStage.Hull,
+                    rd.ShaderStage.Domain,
+                    rd.ShaderStage.Geometry,
+                    rd.ShaderStage.Pixel,
+                    rd.ShaderStage.Compute,
+                ]
+
+            for action in draw_actions:
+                controller.SetFrameEvent(action.eventId, False)
+                pipe = controller.GetPipelineState()
+
+                for s in stages_to_check:
+                    shader = pipe.GetShader(s)
+                    if shader == rd.ResourceId.Null():
+                        continue
+
+                    # Get shader name from reflection
+                    reflection = pipe.GetShaderReflection(s)
+                    if reflection:
+                        # Check debug name or entry point
+                        entry_point = pipe.GetShaderEntryPoint(s)
+                        shader_debug_name = ""
+                        try:
+                            shader_debug_name = self.ctx.GetResourceName(shader)
+                        except Exception:
+                            pass
+
+                        # Match against shader name, entry point, or debug name
+                        match_found = False
+                        match_reason = ""
+                        if shader_name.lower() in entry_point.lower():
+                            match_found = True
+                            match_reason = "%s entry_point: '%s'" % (str(s), entry_point)
+                        elif shader_debug_name and shader_name.lower() in shader_debug_name.lower():
+                            match_found = True
+                            match_reason = "%s name: '%s'" % (str(s), shader_debug_name)
+
+                        if match_found:
+                            result["matches"].append({
+                                "event_id": action.eventId,
+                                "name": action.GetName(structured_file),
+                                "match_reason": match_reason,
+                            })
+                            break  # Found match for this draw, move to next
+
+        self._invoke(callback)
+        result["total_matches"] = len(result["matches"])
+        return result
+
+    def find_draws_by_texture(self, texture_name):
+        """
+        Find all draw calls using a texture with the given name (partial match).
+
+        Args:
+            texture_name: Partial name to search for in texture names
+        """
+        if not self.ctx.IsCaptureLoaded():
+            raise ValueError("No capture loaded")
+
+        result = {"matches": [], "scanned_draws": 0}
+
+        def callback(controller):
+            root_actions = controller.GetRootActions()
+            structured_file = controller.GetStructuredFile()
+            all_actions = self._flatten_actions(root_actions)
+
+            # Filter to only draw calls and dispatches
+            draw_actions = [
+                a for a in all_actions
+                if a.flags & (rd.ActionFlags.Drawcall | rd.ActionFlags.Dispatch)
+            ]
+            result["scanned_draws"] = len(draw_actions)
+
+            # All shader stages to check
+            stages_to_check = [
+                rd.ShaderStage.Vertex,
+                rd.ShaderStage.Hull,
+                rd.ShaderStage.Domain,
+                rd.ShaderStage.Geometry,
+                rd.ShaderStage.Pixel,
+                rd.ShaderStage.Compute,
+            ]
+
+            for action in draw_actions:
+                controller.SetFrameEvent(action.eventId, False)
+                pipe = controller.GetPipelineState()
+
+                found_match = False
+                match_reason = ""
+
+                for stage in stages_to_check:
+                    if found_match:
+                        break
+
+                    # Check SRVs (read-only resources)
+                    try:
+                        srvs = pipe.GetReadOnlyResources(stage, False)
+                        for srv in srvs:
+                            if srv.descriptor.resource == rd.ResourceId.Null():
+                                continue
+                            res_name = ""
+                            try:
+                                res_name = self.ctx.GetResourceName(srv.descriptor.resource)
+                            except Exception:
+                                pass
+                            if res_name and texture_name.lower() in res_name.lower():
+                                found_match = True
+                                match_reason = "%s SRV: '%s'" % (str(stage), res_name)
+                                break
+                    except Exception:
+                        pass
+
+                    # Check UAVs (read-write resources)
+                    if not found_match:
+                        try:
+                            uavs = pipe.GetReadWriteResources(stage, False)
+                            for uav in uavs:
+                                if uav.descriptor.resource == rd.ResourceId.Null():
+                                    continue
+                                res_name = ""
+                                try:
+                                    res_name = self.ctx.GetResourceName(uav.descriptor.resource)
+                                except Exception:
+                                    pass
+                                if res_name and texture_name.lower() in res_name.lower():
+                                    found_match = True
+                                    match_reason = "%s UAV: '%s'" % (str(stage), res_name)
+                                    break
+                        except Exception:
+                            pass
+
+                # Check render targets
+                if not found_match:
+                    try:
+                        om = pipe.GetOutputMerger()
+                        if om:
+                            for i, rt in enumerate(om.renderTargets):
+                                if rt.resourceId != rd.ResourceId.Null():
+                                    res_name = ""
+                                    try:
+                                        res_name = self.ctx.GetResourceName(rt.resourceId)
+                                    except Exception:
+                                        pass
+                                    if res_name and texture_name.lower() in res_name.lower():
+                                        found_match = True
+                                        match_reason = "RenderTarget[%d]: '%s'" % (i, res_name)
+                                        break
+                    except Exception:
+                        pass
+
+                if found_match:
+                    result["matches"].append({
+                        "event_id": action.eventId,
+                        "name": action.GetName(structured_file),
+                        "match_reason": match_reason,
+                    })
+
+        self._invoke(callback)
+        result["total_matches"] = len(result["matches"])
+        return result
+
+    def find_draws_by_resource(self, resource_id):
+        """
+        Find all draw calls using a specific resource ID (exact match).
+
+        Args:
+            resource_id: Resource ID to search for (e.g. "ResourceId::12345" or "12345")
+        """
+        if not self.ctx.IsCaptureLoaded():
+            raise ValueError("No capture loaded")
+
+        result = {"matches": [], "scanned_draws": 0}
+
+        def callback(controller):
+            root_actions = controller.GetRootActions()
+            structured_file = controller.GetStructuredFile()
+            all_actions = self._flatten_actions(root_actions)
+
+            # Parse target resource ID
+            target_rid = self._parse_resource_id(resource_id)
+
+            # Filter to only draw calls and dispatches
+            draw_actions = [
+                a for a in all_actions
+                if a.flags & (rd.ActionFlags.Drawcall | rd.ActionFlags.Dispatch)
+            ]
+            result["scanned_draws"] = len(draw_actions)
+
+            # All shader stages to check
+            stages_to_check = [
+                rd.ShaderStage.Vertex,
+                rd.ShaderStage.Hull,
+                rd.ShaderStage.Domain,
+                rd.ShaderStage.Geometry,
+                rd.ShaderStage.Pixel,
+                rd.ShaderStage.Compute,
+            ]
+
+            for action in draw_actions:
+                controller.SetFrameEvent(action.eventId, False)
+                pipe = controller.GetPipelineState()
+
+                found_match = False
+                match_reason = ""
+
+                # Check shaders
+                for stage in stages_to_check:
+                    shader = pipe.GetShader(stage)
+                    if shader == target_rid:
+                        found_match = True
+                        match_reason = "%s shader" % str(stage)
+                        break
+
+                # Check SRVs and UAVs
+                if not found_match:
+                    for stage in stages_to_check:
+                        if found_match:
+                            break
+                        try:
+                            srvs = pipe.GetReadOnlyResources(stage, False)
+                            for srv in srvs:
+                                if srv.descriptor.resource == target_rid:
+                                    found_match = True
+                                    match_reason = "%s SRV slot %d" % (str(stage), srv.access.index)
+                                    break
+                        except Exception:
+                            pass
+
+                        if not found_match:
+                            try:
+                                uavs = pipe.GetReadWriteResources(stage, False)
+                                for uav in uavs:
+                                    if uav.descriptor.resource == target_rid:
+                                        found_match = True
+                                        match_reason = "%s UAV slot %d" % (str(stage), uav.access.index)
+                                        break
+                            except Exception:
+                                pass
+
+                # Check render targets
+                if not found_match:
+                    try:
+                        om = pipe.GetOutputMerger()
+                        if om:
+                            for i, rt in enumerate(om.renderTargets):
+                                if rt.resourceId == target_rid:
+                                    found_match = True
+                                    match_reason = "RenderTarget[%d]" % i
+                                    break
+                            if not found_match and om.depthTarget.resourceId == target_rid:
+                                found_match = True
+                                match_reason = "DepthTarget"
+                    except Exception:
+                        pass
+
+                if found_match:
+                    result["matches"].append({
+                        "event_id": action.eventId,
+                        "name": action.GetName(structured_file),
+                        "match_reason": match_reason,
+                    })
+
+        self._invoke(callback)
+        result["total_matches"] = len(result["matches"])
         return result
 
     def get_draw_call_details(self, event_id):
@@ -743,23 +1171,141 @@ class RenderDocFacade:
         """Invoke callback on replay thread via BlockInvoke"""
         self.ctx.Replay().BlockInvoke(callback)
 
-    def _serialize_actions(self, actions, structured_file, include_children):
-        """Serialize action list to JSON-compatible format"""
+    def _serialize_actions(
+        self,
+        actions,
+        structured_file,
+        include_children,
+        marker_filter=None,
+        exclude_markers=None,
+        event_id_min=None,
+        event_id_max=None,
+        only_actions=False,
+        flags_filter=None,
+        _in_matching_marker=False,
+    ):
+        """
+        Serialize action list to JSON-compatible format with filtering.
+
+        Args:
+            actions: List of actions to serialize
+            structured_file: Structured file for action names
+            include_children: Include child actions in hierarchy
+            marker_filter: Only include actions under markers containing this string
+            exclude_markers: Exclude actions under markers containing these strings
+            event_id_min: Only include actions with event_id >= this value
+            event_id_max: Only include actions with event_id <= this value
+            only_actions: Exclude marker actions (PushMarker/PopMarker/SetMarker)
+            flags_filter: Only include actions with these flags
+            _in_matching_marker: Internal flag for marker_filter recursion
+        """
         serialized = []
+
+        # Build flags filter set for efficient lookup
+        flags_filter_set = None
+        if flags_filter:
+            flags_filter_set = set(flags_filter)
+
         for action in actions:
-            item = {
-                "event_id": action.eventId,
-                "action_id": action.actionId,
-                "name": action.GetName(structured_file),
-                "flags": self._serialize_flags(action.flags),
-                "num_indices": action.numIndices,
-                "num_instances": action.numInstances,
-            }
+            name = action.GetName(structured_file)
+            flags = action.flags
+
+            # Check if this is a marker
+            is_push_marker = flags & rd.ActionFlags.PushMarker
+            is_set_marker = flags & rd.ActionFlags.SetMarker
+            is_pop_marker = flags & rd.ActionFlags.PopMarker
+            is_marker = is_push_marker or is_set_marker or is_pop_marker
+
+            # 1. exclude_markers check - skip this marker and all its children
+            if exclude_markers and is_marker:
+                if any(ex in name for ex in exclude_markers):
+                    continue
+
+            # 2. marker_filter check - track if we're inside a matching marker
+            in_matching = _in_matching_marker
+            if marker_filter:
+                if is_push_marker and marker_filter in name:
+                    in_matching = True
+
+            # 3. Determine if action passes event_id range filter
+            # For markers with children, we check children even if marker is outside range
+            in_range = True
+            if not is_marker:
+                if event_id_min is not None and action.eventId < event_id_min:
+                    in_range = False
+                if event_id_max is not None and action.eventId > event_id_max:
+                    in_range = False
+
+            # 4. only_actions check - skip markers but process their children
+            if only_actions and is_marker:
+                if include_children and action.children:
+                    child_actions = self._serialize_actions(
+                        action.children,
+                        structured_file,
+                        include_children,
+                        marker_filter=marker_filter,
+                        exclude_markers=exclude_markers,
+                        event_id_min=event_id_min,
+                        event_id_max=event_id_max,
+                        only_actions=only_actions,
+                        flags_filter=flags_filter,
+                        _in_matching_marker=in_matching,
+                    )
+                    serialized.extend(child_actions)
+                continue
+
+            # 5. flags_filter check - only for non-markers
+            if flags_filter_set and not is_marker:
+                flag_names = self._serialize_flags(flags)
+                if not any(f in flags_filter_set for f in flag_names):
+                    continue
+
+            # 6. Check if this action should be included based on marker_filter
+            passes_marker_filter = not marker_filter or in_matching
+
+            # 7. For markers with children, check if any children pass filters
+            children_result = []
+            has_passing_children = False
             if include_children and action.children:
-                item["children"] = self._serialize_actions(
-                    action.children, structured_file, include_children
+                children_result = self._serialize_actions(
+                    action.children,
+                    structured_file,
+                    include_children,
+                    marker_filter=marker_filter,
+                    exclude_markers=exclude_markers,
+                    event_id_min=event_id_min,
+                    event_id_max=event_id_max,
+                    only_actions=only_actions,
+                    flags_filter=flags_filter,
+                    _in_matching_marker=in_matching,
                 )
-            serialized.append(item)
+                has_passing_children = len(children_result) > 0
+
+            # Include the action if:
+            # - It passes all filters (for leaf actions)
+            # - It's a marker with children that pass filters (to maintain hierarchy)
+            should_include = False
+            if is_marker:
+                # Include marker if it has children that pass filters
+                should_include = has_passing_children and passes_marker_filter
+            else:
+                # Include leaf action if it passes all filters
+                should_include = in_range and passes_marker_filter
+
+            if should_include:
+                flag_names = self._serialize_flags(flags)
+                item = {
+                    "event_id": action.eventId,
+                    "action_id": action.actionId,
+                    "name": name,
+                    "flags": flag_names,
+                    "num_indices": action.numIndices,
+                    "num_instances": action.numInstances,
+                }
+                if children_result:
+                    item["children"] = children_result
+                serialized.append(item)
+
         return serialized
 
     def _serialize_flags(self, flags):

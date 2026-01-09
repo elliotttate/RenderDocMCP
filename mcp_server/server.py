@@ -29,17 +29,107 @@ def get_capture_status() -> dict:
 
 
 @mcp.tool
-def get_draw_calls(include_children: bool = True) -> dict:
+def get_draw_calls(
+    include_children: bool = True,
+    marker_filter: str | None = None,
+    exclude_markers: list[str] | None = None,
+    event_id_min: int | None = None,
+    event_id_max: int | None = None,
+    only_actions: bool = False,
+    flags_filter: list[str] | None = None,
+) -> dict:
     """
     Get the list of all draw calls and actions in the current capture.
 
     Args:
         include_children: Include child actions in the hierarchy (default: True)
+        marker_filter: Only include actions under markers containing this string (partial match)
+        exclude_markers: Exclude actions under markers containing these strings (list of partial matches)
+        event_id_min: Only include actions with event_id >= this value
+        event_id_max: Only include actions with event_id <= this value
+        only_actions: If True, exclude marker actions (PushMarker/PopMarker/SetMarker)
+        flags_filter: Only include actions with these flags (list of flag names, e.g. ["Drawcall", "Dispatch"])
 
     Returns a hierarchical tree of actions including markers, draw calls,
     dispatches, and other GPU events.
     """
-    return bridge.call("get_draw_calls", {"include_children": include_children})
+    params: dict[str, object] = {"include_children": include_children}
+    if marker_filter is not None:
+        params["marker_filter"] = marker_filter
+    if exclude_markers is not None:
+        params["exclude_markers"] = exclude_markers
+    if event_id_min is not None:
+        params["event_id_min"] = event_id_min
+    if event_id_max is not None:
+        params["event_id_max"] = event_id_max
+    if only_actions:
+        params["only_actions"] = only_actions
+    if flags_filter is not None:
+        params["flags_filter"] = flags_filter
+    return bridge.call("get_draw_calls", params)
+
+
+@mcp.tool
+def get_frame_summary() -> dict:
+    """
+    Get a summary of the current capture frame.
+
+    Returns statistics about the frame including:
+    - API type (D3D11, D3D12, Vulkan, etc.)
+    - Total action count
+    - Statistics: draw calls, dispatches, clears, copies, presents, markers
+    - Top-level markers with event IDs and child counts
+    - Resource counts: textures, buffers
+    """
+    return bridge.call("get_frame_summary")
+
+
+@mcp.tool
+def find_draws_by_shader(
+    shader_name: str,
+    stage: Literal["vertex", "hull", "domain", "geometry", "pixel", "compute"] | None = None,
+) -> dict:
+    """
+    Find all draw calls using a shader with the given name (partial match).
+
+    Args:
+        shader_name: Partial name to search for in shader names or entry points
+        stage: Optional shader stage to search (if not specified, searches all stages)
+
+    Returns a list of matching draw calls with event IDs and match reasons.
+    """
+    params: dict[str, object] = {"shader_name": shader_name}
+    if stage is not None:
+        params["stage"] = stage
+    return bridge.call("find_draws_by_shader", params)
+
+
+@mcp.tool
+def find_draws_by_texture(texture_name: str) -> dict:
+    """
+    Find all draw calls using a texture with the given name (partial match).
+
+    Args:
+        texture_name: Partial name to search for in texture resource names
+
+    Returns a list of matching draw calls with event IDs and match reasons.
+    Searches SRVs, UAVs, and render targets.
+    """
+    return bridge.call("find_draws_by_texture", {"texture_name": texture_name})
+
+
+@mcp.tool
+def find_draws_by_resource(resource_id: str) -> dict:
+    """
+    Find all draw calls using a specific resource ID (exact match).
+
+    Args:
+        resource_id: Resource ID to search for (e.g. "ResourceId::12345" or "12345")
+
+    Returns a list of matching draw calls with event IDs and match reasons.
+    Searches shaders, SRVs, UAVs, render targets, and depth targets.
+    """
+    return bridge.call("find_draws_by_resource", {"resource_id": resource_id})
 
 
 @mcp.tool
