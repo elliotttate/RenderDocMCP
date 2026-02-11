@@ -1,40 +1,40 @@
-# RenderDoc MCP 改善提案
+# RenderDoc MCP Improvement Proposal
 
-## 背景
+## Background
 
-UnityプロジェクトでRenderDocキャプチャを分析する際、以下の課題がある：
+When analyzing RenderDoc captures from Unity projects, the following issues arise:
 
-1. **UIノイズ問題**: Unity Editorからキャプチャすると、`GUI.Repaint`や`UIR.DrawChain`などのEditor UI描画が大量に含まれ、実際のゲーム描画（`Camera.Render`配下）を探すのが困難
-2. **レスポンスサイズ問題**: `get_draw_calls(include_children=true)`の結果が70KB超になり、LLMのコンテキストを圧迫
-3. **探索の非効率性**: 特定のシェーダーやテクスチャを使用しているドローコールを見つけるのに、全ドローコールを1つずつ確認する必要がある
+1. **UI Noise Problem**: Captures from the Unity Editor contain large amounts of Editor UI rendering such as `GUI.Repaint` and `UIR.DrawChain`, making it difficult to find the actual game rendering (under `Camera.Render`)
+2. **Response Size Problem**: The result of `get_draw_calls(include_children=true)` exceeds 70KB, consuming significant LLM context
+3. **Exploration Inefficiency**: Finding draw calls that use a specific shader or texture requires inspecting every draw call one by one
 
-## 改善提案
+## Improvement Proposals
 
-### 1. マーカーフィルタリング（優先度: 高）
+### 1. Marker Filtering (Priority: High)
 
-特定のマーカー配下のみ、または特定のマーカーを除外して取得する機能。
+A feature to retrieve only actions under a specific marker, or to exclude specific markers.
 
 ```python
 get_draw_calls(
     include_children=True,
-    marker_filter="Camera.Render",  # このマーカー配下のみ取得
+    marker_filter="Camera.Render",  # Only get actions under this marker
     exclude_markers=["GUI.Repaint", "UIR.DrawChain", "UGUI.Rendering"]
 )
 ```
 
-**ユースケース**:
-- Unity Editorキャプチャからゲーム描画のみを抽出
-- 特定のレンダリングパス（Shadows, PostProcess等）のみを調査
+**Use Cases**:
+- Extract only game rendering from Unity Editor captures
+- Investigate specific rendering passes only (Shadows, PostProcess, etc.)
 
-**期待される効果**:
-- レスポンスサイズを10-20%に削減
-- LLMが直接解析可能なサイズに収まる
+**Expected Benefits**:
+- Reduce response size to 10-20% of original
+- Fits within a size directly parseable by LLMs
 
 ---
 
-### 2. event_id範囲指定（優先度: 高）
+### 2. Event ID Range Specification (Priority: High)
 
-特定のevent_id範囲のみを取得する機能。
+A feature to retrieve only actions within a specific event_id range.
 
 ```python
 get_draw_calls(
@@ -44,32 +44,32 @@ get_draw_calls(
 )
 ```
 
-**ユースケース**:
-- `Camera.Render`のevent_idが判明している場合、その周辺のみを取得
-- 問題のあるドローコール周辺を詳細に調査
+**Use Cases**:
+- When the event_id of `Camera.Render` is known, retrieve only its surrounding area
+- Detailed investigation around a problematic draw call
 
-**期待される効果**:
-- 必要な部分だけを高速に取得
-- 段階的な探索が可能に
+**Expected Benefits**:
+- Fast retrieval of only the necessary portion
+- Enables incremental exploration
 
 ---
 
-### 3. シェーダー/テクスチャ/リソースによる逆引き検索（優先度: 中）
+### 3. Reverse-Lookup Search by Shader/Texture/Resource (Priority: Medium)
 
-特定のリソースを使用しているドローコールを検索する機能。
+A feature to search for draw calls that use a specific resource.
 
 ```python
-# シェーダー名で検索（部分一致）
+# Search by shader name (partial match)
 find_draws_by_shader(shader_name="Toon")
 
-# テクスチャ名で検索（部分一致）
+# Search by texture name (partial match)
 find_draws_by_texture(texture_name="CharacterSkin")
 
-# リソースIDで検索（完全一致）
+# Search by resource ID (exact match)
 find_draws_by_resource(resource_id="ResourceId::12345")
 ```
 
-**返り値例**:
+**Example Return Value**:
 ```json
 {
   "matches": [
@@ -80,22 +80,22 @@ find_draws_by_resource(resource_id="ResourceId::12345")
 }
 ```
 
-**ユースケース**:
-- 「このシェーダーを使っているドローはどれ？」という最も一般的な質問に直接回答
-- 特定のテクスチャがどこで使われているか追跡
-- シェーダーバグの影響範囲を特定
+**Use Cases**:
+- Directly answer the most common question: "Which draws use this shader?"
+- Track where a specific texture is used
+- Determine the impact scope of a shader bug
 
 ---
 
-### 4. フレームサマリー取得（優先度: 中）
+### 4. Frame Summary Retrieval (Priority: Medium)
 
-フレーム全体の概要を取得する機能。
+A feature to get an overview of the entire frame.
 
 ```python
 get_frame_summary()
 ```
 
-**返り値例**:
+**Example Return Value**:
 ```json
 {
   "api": "D3D11",
@@ -124,39 +124,39 @@ get_frame_summary()
 }
 ```
 
-**ユースケース**:
-- 探索の起点として全体像を把握
-- どのマーカー配下を詳しく見るか判断
-- パフォーマンス概要の把握
+**Use Cases**:
+- Get the big picture as a starting point for exploration
+- Decide which marker subtree to investigate in detail
+- Get a performance overview
 
 ---
 
-### 5. ドローコールのみ取得モード（優先度: 中）
+### 5. Draw Calls Only Mode (Priority: Medium)
 
-マーカー（PushMarker/PopMarker）を除外し、実際の描画コールのみを取得する機能。
+A feature to exclude markers (PushMarker/PopMarker) and retrieve only actual draw calls.
 
 ```python
 get_draw_calls(
-    only_actions=True,  # マーカーを除外
-    flags_filter=["Drawcall", "Dispatch"]  # 特定のフラグを持つもののみ
+    only_actions=True,  # Exclude markers
+    flags_filter=["Drawcall", "Dispatch"]  # Only items with specific flags
 )
 ```
 
-**ユースケース**:
-- ドローコールの総数と一覧だけ欲しい場合
-- Compute Shader（Dispatch）のみを調査したい場合
+**Use Cases**:
+- When you just want the total count and list of draw calls
+- When investigating Compute Shaders (Dispatch) only
 
 ---
 
-### 6. バッチパイプラインステート取得（優先度: 低）
+### 6. Batch Pipeline State Retrieval (Priority: Low)
 
-複数のevent_idのパイプラインステートを一度に取得する機能。
+A feature to retrieve pipeline states for multiple event_ids at once.
 
 ```python
 get_multiple_pipeline_states(event_ids=[7538, 7558, 7450, 7458])
 ```
 
-**返り値例**:
+**Example Return Value**:
 ```json
 {
   "states": {
@@ -168,26 +168,26 @@ get_multiple_pipeline_states(event_ids=[7538, 7558, 7450, 7458])
 }
 ```
 
-**ユースケース**:
-- 複数のドローコールを比較分析
-- 差分調査（正常なドローと異常なドローの比較）
+**Use Cases**:
+- Comparative analysis of multiple draw calls
+- Difference investigation (comparing a normal draw call with an abnormal one)
 
 ---
 
-## 優先度まとめ
+## Priority Summary
 
-| 優先度 | 機能 | 実装難易度 | 効果 |
-|--------|------|-----------|------|
-| **高** | マーカーフィルタリング | 中 | UIノイズ除去で劇的に改善 |
-| **高** | event_id範囲指定 | 低 | 部分取得で高速化 |
-| **中** | シェーダー/テクスチャ逆引き | 高 | 最も多いユースケースを直接サポート |
-| **中** | フレームサマリー | 中 | 探索の起点として有用 |
-| **中** | ドローコールのみ取得 | 低 | シンプルなフィルタリング |
-| **低** | バッチ取得 | 低 | 効率化だが必須ではない |
+| Priority | Feature | Implementation Difficulty | Impact |
+|----------|---------|--------------------------|--------|
+| **High** | Marker filtering | Medium | Dramatic improvement by removing UI noise |
+| **High** | Event ID range specification | Low | Faster via partial retrieval |
+| **Medium** | Shader/texture reverse-lookup | High | Directly supports the most common use case |
+| **Medium** | Frame summary | Medium | Useful as an exploration starting point |
+| **Medium** | Draw calls only mode | Low | Simple filtering |
+| **Low** | Batch retrieval | Low | Efficiency improvement, not essential |
 
-## Unity固有のフィルタリングプリセット（オプション）
+## Unity-Specific Filtering Presets (Optional)
 
-Unity専用のプリセットがあると便利：
+Unity-specific presets would be convenient:
 
 ```python
 get_draw_calls(
@@ -195,66 +195,66 @@ get_draw_calls(
 )
 ```
 
-**プリセット内容**:
+**Preset Contents**:
 - `marker_filter`: "Camera.Render"
 - `exclude_markers`: ["GUI.Repaint", "UIR.DrawChain", "GUITexture.Draw", "UGUI.Rendering.RenderOverlays", "PlayerEndOfFrame", "EditorLoop"]
 
 ---
 
-## 実装の参考：現在のワークフローの問題点
+## Reference: Current Workflow Issues
 
-### 現状のフロー
+### Current Flow
 
 ```
 1. get_draw_calls(include_children=true)
-   → 76KB のJSONが返る（ファイルに保存される）
+   → Returns 76KB of JSON (saved to file)
 
-2. ファイルを外部ツール（Python等）で解析
-   → Camera.Render の event_id を特定（例: 7372）
+2. Analyze the file with external tools (Python, etc.)
+   → Identify the event_id of Camera.Render (e.g., 7372)
 
-3. 手動でevent_id範囲を指定して詳細調査
+3. Manually specify event_id range for detailed investigation
    → get_pipeline_state(7538), get_shader_info(7538, "pixel"), ...
 ```
 
-### 改善後の理想フロー
+### Ideal Flow After Improvements
 
 ```
 1. get_frame_summary()
-   → Camera.Render が event_id: 7372 にあることが分かる
+   → Learn that Camera.Render is at event_id: 7372
 
 2. get_draw_calls(marker_filter="Camera.Render", exclude_markers=[...])
-   → 必要なドローコールのみ取得（数KB）
+   → Get only the necessary draw calls (a few KB)
 
 3. find_draws_by_shader(shader_name="MyShader")
-   → 該当するevent_idが直接返る
+   → Directly get the matching event_ids
 
-4. get_pipeline_state(event_id) で詳細確認
+4. get_pipeline_state(event_id) for detailed inspection
 ```
 
 ---
 
-## 補足：スキップすべきUnityマーカー一覧
+## Appendix: Unity Markers to Skip
 
-Unity Editorからのキャプチャで除外すべきマーカー：
+Markers to exclude when working with Unity Editor captures:
 
-| マーカー名 | 説明 |
-|-----------|------|
-| `GUI.Repaint` | IMGUI描画 |
-| `UIR.DrawChain` | UI Toolkit描画 |
-| `GUITexture.Draw` | GUIテクスチャ描画 |
-| `UGUI.Rendering.RenderOverlays` | uGUIオーバーレイ |
-| `PlayerEndOfFrame` | フレーム終了処理 |
-| `EditorLoop` | エディタループ処理 |
+| Marker Name | Description |
+|-------------|-------------|
+| `GUI.Repaint` | IMGUI rendering |
+| `UIR.DrawChain` | UI Toolkit rendering |
+| `GUITexture.Draw` | GUI texture rendering |
+| `UGUI.Rendering.RenderOverlays` | uGUI overlay rendering |
+| `PlayerEndOfFrame` | End-of-frame processing |
+| `EditorLoop` | Editor loop processing |
 
-逆に、重要なマーカー：
+Conversely, important markers:
 
-| マーカー名 | 説明 |
-|-----------|------|
-| `Camera.Render` | メインカメラ描画の起点 |
-| `Drawing` | 描画フェーズ |
-| `Render.OpaqueGeometry` | 不透明オブジェクト描画 |
-| `Render.TransparentGeometry` | 半透明オブジェクト描画 |
-| `RenderForward.RenderLoopJob` | フォワードレンダリングのドローコール群 |
-| `Camera.RenderSkybox` | スカイボックス描画 |
-| `Camera.ImageEffects` | ポストプロセス |
-| `Shadows.RenderShadowMap` | シャドウマップ生成 |
+| Marker Name | Description |
+|-------------|-------------|
+| `Camera.Render` | Main camera rendering entry point |
+| `Drawing` | Drawing phase |
+| `Render.OpaqueGeometry` | Opaque object rendering |
+| `Render.TransparentGeometry` | Transparent object rendering |
+| `RenderForward.RenderLoopJob` | Forward rendering draw call group |
+| `Camera.RenderSkybox` | Skybox rendering |
+| `Camera.ImageEffects` | Post-processing |
+| `Shadows.RenderShadowMap` | Shadow map generation |

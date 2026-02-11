@@ -1,134 +1,134 @@
 # RenderDoc MCP Server
 
-RenderDoc UI拡張機能として動作するMCPサーバー。AIアシスタントがRenderDocのキャプチャデータにアクセスし、DirectX 11/12のグラフィックスデバッグを支援する。
+An MCP server that runs as a RenderDoc UI extension. It allows AI assistants to access RenderDoc capture data and assist with DirectX 11/12 graphics debugging.
 
-## アーキテクチャ
+## Architecture
 
-**ハイブリッドプロセス分離方式**:
+**Hybrid Process Isolation**:
 
 ```
 Claude/AI Client (stdio)
         │
         ▼
-MCP Server Process (標準Python + FastMCP 2.0)
+MCP Server Process (Standard Python + FastMCP 2.0)
         │ File-based IPC (%TEMP%/renderdoc_mcp/)
         ▼
 RenderDoc Process (Extension + File Polling)
 ```
 
-## プロジェクト構成
+## Project Structure
 
 ```
 RenderDocMCP/
-├── mcp_server/                        # MCPサーバー
-│   ├── server.py                      # FastMCPエントリーポイント
-│   ├── config.py                      # 設定
+├── mcp_server/                        # MCP Server
+│   ├── server.py                      # FastMCP entry point
+│   ├── config.py                      # Configuration
 │   └── bridge/
-│       └── client.py                  # ファイルベースIPCクライアント
+│       └── client.py                  # File-based IPC client
 │
-├── renderdoc_extension/               # RenderDoc拡張機能
+├── renderdoc_extension/               # RenderDoc Extension
 │   ├── __init__.py                    # register()/unregister()
-│   ├── extension.json                 # マニフェスト
-│   ├── socket_server.py               # ファイルベースIPCサーバー
-│   ├── request_handler.py             # リクエスト処理
-│   └── renderdoc_facade.py            # RenderDoc APIラッパー
+│   ├── extension.json                 # Manifest
+│   ├── socket_server.py               # File-based IPC server
+│   ├── request_handler.py             # Request handler
+│   └── renderdoc_facade.py            # RenderDoc API wrapper
 │
 └── scripts/
-    └── install_extension.py           # 拡張機能インストール
+    └── install_extension.py           # Extension installer
 ```
 
-## MCPツール
+## MCP Tools
 
-| ツール名 | 説明 |
-|---------|------|
-| `list_captures` | 指定ディレクトリ内の.rdcファイル一覧を取得 |
-| `open_capture` | キャプチャファイルを開く（既存キャプチャは自動で閉じる） |
-| `get_capture_status` | キャプチャ読込状態確認 |
-| `get_draw_calls` | ドローコール一覧（階層構造、フィルタリング対応） |
-| `get_frame_summary` | フレーム全体の統計情報（ドローコール数、マーカー一覧等） |
-| `find_draws_by_shader` | シェーダー名でドローコールを逆引き検索 |
-| `find_draws_by_texture` | テクスチャ名でドローコールを逆引き検索 |
-| `find_draws_by_resource` | リソースIDでドローコールを逆引き検索 |
-| `get_draw_call_details` | 特定ドローコールの詳細 |
-| `get_action_timings` | アクションのGPU実行時間を取得 |
-| `get_shader_info` | シェーダーソース/定数バッファ |
-| `get_buffer_contents` | バッファデータ取得（オフセット/長さ指定可） |
-| `get_texture_info` | テクスチャメタデータ |
-| `get_texture_data` | テクスチャピクセルデータ取得（mip/slice/3Dスライス対応） |
-| `get_pipeline_state` | パイプライン状態全体 |
+| Tool Name | Description |
+|-----------|-------------|
+| `list_captures` | List .rdc files in a specified directory |
+| `open_capture` | Open a capture file (existing capture is automatically closed) |
+| `get_capture_status` | Check capture load status |
+| `get_draw_calls` | List draw calls (hierarchical, with filtering support) |
+| `get_frame_summary` | Frame-level statistics (draw call count, marker list, etc.) |
+| `find_draws_by_shader` | Reverse-lookup draw calls by shader name |
+| `find_draws_by_texture` | Reverse-lookup draw calls by texture name |
+| `find_draws_by_resource` | Reverse-lookup draw calls by resource ID |
+| `get_draw_call_details` | Detailed info for a specific draw call |
+| `get_action_timings` | Get GPU execution time for actions |
+| `get_shader_info` | Shader source / constant buffers |
+| `get_buffer_contents` | Get buffer data (offset/length supported) |
+| `get_texture_info` | Texture metadata |
+| `get_texture_data` | Get texture pixel data (mip/slice/3D slice supported) |
+| `get_pipeline_state` | Full pipeline state |
 
-### get_draw_calls フィルタリングオプション
+### get_draw_calls Filtering Options
 
 ```python
 get_draw_calls(
-    include_children=True,      # 子アクションを含める
-    marker_filter="Camera.Render",  # このマーカー配下のみ取得
-    exclude_markers=["GUI.Repaint", "UIR.DrawChain"],  # 除外するマーカー
-    event_id_min=7372,          # event_id範囲の開始
-    event_id_max=7600,          # event_id範囲の終了
-    only_actions=True,          # マーカーを除外（ドローコールのみ）
-    flags_filter=["Drawcall", "Dispatch"],  # 特定フラグのみ
+    include_children=True,      # Include child actions
+    marker_filter="Camera.Render",  # Only get actions under this marker
+    exclude_markers=["GUI.Repaint", "UIR.DrawChain"],  # Markers to exclude
+    event_id_min=7372,          # Start of event_id range
+    event_id_max=7600,          # End of event_id range
+    only_actions=True,          # Exclude markers (draw calls only)
+    flags_filter=["Drawcall", "Dispatch"],  # Specific flags only
 )
 ```
 
-### キャプチャ管理ツール
+### Capture Management Tools
 
 ```python
-# ディレクトリ内のキャプチャファイルを列挙
+# List capture files in a directory
 list_captures(directory="D:\\captures")
 # → {"count": 3, "captures": [{"filename": "game.rdc", "path": "...", "size_bytes": 12345, "modified_time": "..."}, ...]}
 
-# キャプチャファイルを開く（既存キャプチャは自動で閉じられる）
+# Open a capture file (existing capture is automatically closed)
 open_capture(capture_path="D:\\captures\\game.rdc")
 # → {"success": true, "filename": "game.rdc", "api": "D3D11"}
 ```
 
-### 逆引き検索ツール
+### Reverse-Lookup Search Tools
 
 ```python
-# シェーダー名で検索（部分一致）
+# Search by shader name (partial match)
 find_draws_by_shader(shader_name="Toon", stage="pixel")
 
-# テクスチャ名で検索（部分一致）
+# Search by texture name (partial match)
 find_draws_by_texture(texture_name="CharacterSkin")
 
-# リソースIDで検索（完全一致）
+# Search by resource ID (exact match)
 find_draws_by_resource(resource_id="ResourceId::12345")
 ```
 
-### GPU タイミング取得
+### GPU Timing Retrieval
 
 ```python
-# 全アクションのタイミングを取得
+# Get timings for all actions
 get_action_timings()
 # → {"available": true, "unit": "CounterUnit.Seconds", "timings": [...], "total_duration_ms": 12.5, "count": 150}
 
-# 特定のイベントIDのみ取得
+# Get timings for specific event IDs only
 get_action_timings(event_ids=[100, 200, 300])
 
-# マーカーでフィルタリング
+# Filter by marker
 get_action_timings(marker_filter="Camera.Render", exclude_markers=["GUI.Repaint"])
 ```
 
-**注意**: GPUタイミングカウンターはハードウェア/ドライバーによっては利用できない場合があります。
-`available: false` が返された場合、そのキャプチャではタイミング情報を取得できません。
+**Note**: GPU timing counters may not be available depending on hardware/driver.
+If `available: false` is returned, timing information cannot be retrieved for that capture.
 
-## 通信プロトコル
+## Communication Protocol
 
-ファイルベースIPC:
-- IPCディレクトリ: `%TEMP%/renderdoc_mcp/`
-- `request.json`: リクエスト（MCPサーバー → RenderDoc）
-- `response.json`: レスポンス（RenderDoc → MCPサーバー）
-- `lock`: 書き込み中ロックファイル
-- ポーリング間隔: 100ms（RenderDoc側）
+File-based IPC:
+- IPC directory: `%TEMP%/renderdoc_mcp/`
+- `request.json`: Request (MCP Server → RenderDoc)
+- `response.json`: Response (RenderDoc → MCP Server)
+- `lock`: Write lock file
+- Polling interval: 100ms (RenderDoc side)
 
-## 開発ノート
+## Development Notes
 
-- RenderDoc内蔵Pythonにはsocket/QtNetworkモジュールがないため、ファイルベースIPCを採用
-- RenderDoc拡張機能はPython 3.6標準ライブラリのみ使用
-- ReplayControllerへのアクセスは`BlockInvoke`経由で行う
+- File-based IPC is used because RenderDoc's built-in Python lacks socket/QtNetwork modules
+- The RenderDoc extension uses only the Python 3.6 standard library
+- ReplayController access is done via `BlockInvoke`
 
-## 参考リンク
+## Reference Links
 
 - [FastMCP](https://github.com/jlowin/fastmcp)
 - [RenderDoc Python API](https://renderdoc.org/docs/python_api/index.html)
