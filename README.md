@@ -41,14 +41,6 @@ If disconnections occur during long `open_capture` calls or large queries, the f
 - `RENDERDOC_MCP_CLIENT_MUTEX_STALE_AGE` (default: `900`)
   Seconds before the client exclusive lock is considered stale (increased for long-running operations)
 
-### Stress Testing
-
-Bridge drop verification can be run with:
-
-```bash
-python scripts/stress_bridge.py --method get_capture_status --threads 8 --requests 200 --dump-diagnostics
-```
-
 ## Setup
 
 ### 1. Install the RenderDoc Extension
