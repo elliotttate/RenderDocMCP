@@ -14,17 +14,18 @@ class SearchService:
         self.ctx = ctx
         self._invoke = invoke_fn
 
-    def _search_draws(self, matcher_fn):
+    def _search_draws(self, matcher_fn, max_results=0):
         """
         Common template for searching draw calls.
 
         Args:
             matcher_fn: Function(pipe, controller, action, ctx) -> match_reason or None
+            max_results: Stop after finding this many matches (0 = unlimited)
         """
         if not self.ctx.IsCaptureLoaded():
             raise ValueError("No capture loaded")
 
-        result = {"matches": [], "scanned_draws": 0}
+        result = {"matches": [], "scanned_draws": 0, "truncated": False}
 
         def callback(controller):
             root_actions = controller.GetRootActions()
@@ -49,12 +50,15 @@ class SearchService:
                         "name": action.GetName(structured_file),
                         "match_reason": match_reason,
                     })
+                    if max_results > 0 and len(result["matches"]) >= max_results:
+                        result["truncated"] = True
+                        break
 
         self._invoke(callback)
         result["total_matches"] = len(result["matches"])
         return result
 
-    def find_draws_by_shader(self, shader_name, stage=None):
+    def find_draws_by_shader(self, shader_name, stage=None, max_results=0):
         """Find all draw calls using a shader with the given name (partial match)."""
         # Determine which stages to check
         if stage:
@@ -83,9 +87,9 @@ class SearchService:
                         return "%s name: '%s'" % (str(s), shader_debug_name)
             return None
 
-        return self._search_draws(matcher)
+        return self._search_draws(matcher, max_results=max_results)
 
-    def find_draws_by_texture(self, texture_name):
+    def find_draws_by_texture(self, texture_name, max_results=0):
         """Find all draw calls using a texture with the given name (partial match)."""
         stages_to_check = Helpers.get_all_shader_stages()
 
@@ -141,9 +145,9 @@ class SearchService:
 
             return None
 
-        return self._search_draws(matcher)
+        return self._search_draws(matcher, max_results=max_results)
 
-    def find_draws_by_resource(self, resource_id):
+    def find_draws_by_resource(self, resource_id, max_results=0):
         """Find all draw calls using a specific resource ID (exact match)."""
         target_rid = Parsers.parse_resource_id(resource_id)
         stages_to_check = Helpers.get_all_shader_stages()
@@ -187,4 +191,4 @@ class SearchService:
 
             return None
 
-        return self._search_draws(matcher)
+        return self._search_draws(matcher, max_results=max_results)

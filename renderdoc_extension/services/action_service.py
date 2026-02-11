@@ -158,15 +158,32 @@ class ActionService:
                 "index_offset": action.indexOffset,
             }
 
-            # Output resources
+            # Output resources (handle both ResourceId and Descriptor types)
             outputs = []
-            for i, output in enumerate(action.outputs):
-                if output != rd.ResourceId.Null():
-                    outputs.append({"index": i, "resource_id": str(output)})
+            try:
+                for i, output in enumerate(action.outputs):
+                    try:
+                        # Newer RenderDoc: output may be a Descriptor with .resource
+                        res_id = getattr(output, 'resource', output)
+                        if res_id != rd.ResourceId.Null():
+                            outputs.append({"index": i, "resource_id": str(res_id)})
+                    except Exception:
+                        try:
+                            if output != rd.ResourceId.Null():
+                                outputs.append({"index": i, "resource_id": str(output)})
+                        except Exception:
+                            pass
+            except Exception:
+                pass
             details["outputs"] = outputs
 
-            if action.depthOut != rd.ResourceId.Null():
-                details["depth_output"] = str(action.depthOut)
+            try:
+                depth_out = getattr(action, 'depthOut', rd.ResourceId.Null())
+                depth_res = getattr(depth_out, 'resource', depth_out)
+                if depth_res != rd.ResourceId.Null():
+                    details["depth_output"] = str(depth_res)
+            except Exception:
+                pass
 
             result["details"] = details
 
@@ -181,6 +198,7 @@ class ActionService:
         event_ids=None,
         marker_filter=None,
         exclude_markers=None,
+        top_n=0,
     ):
         """
         Get GPU timing information for actions.
@@ -190,6 +208,7 @@ class ActionService:
                       If None, returns timings for all actions.
             marker_filter: Only include actions under markers containing this string.
             exclude_markers: Exclude actions under markers containing these strings.
+            top_n: If > 0, return only the N slowest actions sorted by duration descending.
 
         Returns:
             Dictionary with:
@@ -297,8 +316,13 @@ class ActionService:
 
             collect_timings(root_actions)
 
-            # Sort by event_id
-            timings.sort(key=lambda x: x["event_id"])
+            # Apply top_n filter: return only the N slowest actions
+            if top_n > 0 and len(timings) > top_n:
+                timings.sort(key=lambda x: x["duration_ms"], reverse=True)
+                timings = timings[:top_n]
+            else:
+                # Sort by event_id
+                timings.sort(key=lambda x: x["event_id"])
 
             result["data"] = {
                 "available": True,

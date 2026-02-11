@@ -26,7 +26,7 @@ class ResourceService:
                 return tex
         return None
 
-    def get_buffer_contents(self, resource_id, offset=0, length=0):
+    def get_buffer_contents(self, resource_id, offset=0, length=0, event_id=None):
         """Get buffer data"""
         if not self.ctx.IsCaptureLoaded():
             raise ValueError("No capture loaded")
@@ -34,22 +34,50 @@ class ResourceService:
         result = {"data": None, "error": None}
 
         def callback(controller):
+            if event_id is not None:
+                try:
+                    controller.SetFrameEvent(int(event_id), True)
+                except Exception as e:
+                    result["error"] = "Invalid event_id %s: %s" % (str(event_id), str(e))
+                    return
+
             # Parse resource ID
             try:
-                rid = Parsers.parse_resource_id(resource_id)
+                target_id = Parsers.extract_numeric_id(resource_id)
             except Exception:
                 result["error"] = "Invalid resource ID: %s" % resource_id
                 return
 
             # Find buffer
             buf_desc = None
+            rid = rd.ResourceId.Null()
             for buf in controller.GetBuffers():
-                if buf.resourceId == rid:
+                try:
+                    buf_id = Parsers.extract_numeric_id(str(buf.resourceId))
+                except Exception:
+                    continue
+                if buf_id == target_id:
                     buf_desc = buf
+                    rid = buf.resourceId
                     break
 
             if not buf_desc:
-                result["error"] = "Buffer not found: %s" % resource_id
+                # Fallback: try direct parse path for forks where GetBuffers()
+                # list is incomplete but GetBufferData accepts the ID.
+                try:
+                    rid = Parsers.parse_resource_id(resource_id)
+                    data = controller.GetBufferData(rid, offset, length if length > 0 else 0)
+                    result["data"] = {
+                        "resource_id": resource_id,
+                        "event_id": event_id,
+                        "length": len(data),
+                        "total_size": len(data),
+                        "offset": offset,
+                        "content_base64": base64.b64encode(data).decode("ascii"),
+                        "buffer_lookup": "direct_fallback",
+                    }
+                except Exception:
+                    result["error"] = "Buffer not found: %s" % resource_id
                 return
 
             # Get data
@@ -58,6 +86,7 @@ class ResourceService:
 
             result["data"] = {
                 "resource_id": resource_id,
+                "event_id": event_id,
                 "length": len(data),
                 "total_size": buf_desc.length,
                 "offset": offset,
@@ -85,8 +114,9 @@ class ResourceService:
                     result["error"] = "Texture not found: %s" % resource_id
                     return
 
-                result["texture"] = {
+                tex_info = {
                     "resource_id": resource_id,
+                    "name": "",
                     "width": tex_desc.width,
                     "height": tex_desc.height,
                     "depth": tex_desc.depth,
@@ -95,8 +125,20 @@ class ResourceService:
                     "format": str(tex_desc.format.Name()),
                     "dimension": str(tex_desc.type),
                     "msaa_samples": tex_desc.msSamp,
-                    "byte_size": tex_desc.byteSize,
                 }
+                try:
+                    tex_info["byte_size"] = int(tex_desc.byteSize)
+                except Exception:
+                    pass
+                try:
+                    # Get resource name safely
+                    rname = self.ctx.GetResourceName(tex_desc.resourceId)
+                    if rname:
+                        # Sanitize: remove non-ASCII chars that could break JSON
+                        tex_info["name"] = rname.encode('ascii', 'replace').decode('ascii')
+                except Exception:
+                    pass
+                result["texture"] = tex_info
             except Exception as e:
                 import traceback
                 result["error"] = "Error: %s\n%s" % (str(e), traceback.format_exc())
@@ -107,7 +149,15 @@ class ResourceService:
             raise ValueError(result["error"])
         return result["texture"]
 
-    def get_texture_data(self, resource_id, mip=0, slice=0, sample=0, depth_slice=None):
+    def get_texture_data(
+        self,
+        resource_id,
+        mip=0,
+        slice=0,
+        sample=0,
+        depth_slice=None,
+        event_id=None,
+    ):
         """Get texture pixel data."""
         if not self.ctx.IsCaptureLoaded():
             raise ValueError("No capture loaded")
@@ -115,6 +165,13 @@ class ResourceService:
         result = {"data": None, "error": None}
 
         def callback(controller):
+            if event_id is not None:
+                try:
+                    controller.SetFrameEvent(int(event_id), True)
+                except Exception as e:
+                    result["error"] = "Invalid event_id %s: %s" % (str(event_id), str(e))
+                    return
+
             tex_desc = self._find_texture_by_id(controller, resource_id)
 
             if not tex_desc:
@@ -192,6 +249,7 @@ class ResourceService:
 
             result["data"] = {
                 "resource_id": resource_id,
+                "event_id": event_id,
                 "width": mip_width,
                 "height": mip_height,
                 "depth": output_depth,
