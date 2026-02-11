@@ -11,8 +11,10 @@ class RequestHandler:
 
     def __init__(self, facade):
         self.facade = facade
+        self._bridge_server = None
         self._methods = {
             "ping": self._handle_ping,
+            "get_bridge_diagnostics": self._handle_get_bridge_diagnostics,
             "get_capture_status": self._handle_get_capture_status,
             "get_draw_calls": self._handle_get_draw_calls,
             "get_frame_summary": self._handle_get_frame_summary,
@@ -26,9 +28,15 @@ class RequestHandler:
             "get_texture_info": self._handle_get_texture_info,
             "get_texture_data": self._handle_get_texture_data,
             "get_pipeline_state": self._handle_get_pipeline_state,
+            "get_event_insight": self._handle_get_event_insight,
+            "get_frame_digest": self._handle_get_frame_digest,
             "list_captures": self._handle_list_captures,
             "open_capture": self._handle_open_capture,
         }
+
+    def set_bridge_server(self, server):
+        """Attach bridge server instance to expose runtime diagnostics."""
+        self._bridge_server = server
 
     def handle(self, request):
         """Handle a request and return response"""
@@ -58,6 +66,21 @@ class RequestHandler:
     def _handle_ping(self, params):
         """Handle ping request"""
         return {"status": "ok", "message": "pong"}
+
+    def _handle_get_bridge_diagnostics(self, params):
+        """Handle get_bridge_diagnostics request"""
+        include_recent_errors = bool(params.get("include_recent_errors", True))
+        max_recent_errors = int(params.get("max_recent_errors", 16))
+        if self._bridge_server is None:
+            return {
+                "schema_version": "bridge_diagnostics.v1",
+                "running": False,
+                "error": "bridge server handle not attached",
+            }
+        return self._bridge_server.get_diagnostics(
+            include_recent_errors=include_recent_errors,
+            max_recent_errors=max_recent_errors,
+        )
 
     def _handle_get_capture_status(self, params):
         """Handle get_capture_status request"""
@@ -92,21 +115,24 @@ class RequestHandler:
         if shader_name is None:
             raise ValueError("shader_name is required")
         stage = params.get("stage")
-        return self.facade.find_draws_by_shader(shader_name, stage)
+        max_results = params.get("max_results", 0)
+        return self.facade.find_draws_by_shader(shader_name, stage, max_results=max_results)
 
     def _handle_find_draws_by_texture(self, params):
         """Handle find_draws_by_texture request"""
         texture_name = params.get("texture_name")
         if texture_name is None:
             raise ValueError("texture_name is required")
-        return self.facade.find_draws_by_texture(texture_name)
+        max_results = params.get("max_results", 0)
+        return self.facade.find_draws_by_texture(texture_name, max_results=max_results)
 
     def _handle_find_draws_by_resource(self, params):
         """Handle find_draws_by_resource request"""
         resource_id = params.get("resource_id")
         if resource_id is None:
             raise ValueError("resource_id is required")
-        return self.facade.find_draws_by_resource(resource_id)
+        max_results = params.get("max_results", 0)
+        return self.facade.find_draws_by_resource(resource_id, max_results=max_results)
 
     def _handle_get_draw_call_details(self, params):
         """Handle get_draw_call_details request"""
@@ -120,10 +146,12 @@ class RequestHandler:
         event_ids = params.get("event_ids")
         marker_filter = params.get("marker_filter")
         exclude_markers = params.get("exclude_markers")
+        top_n = params.get("top_n", 0)
         return self.facade.get_action_timings(
             event_ids=event_ids,
             marker_filter=marker_filter,
             exclude_markers=exclude_markers,
+            top_n=top_n,
         )
 
     def _handle_get_shader_info(self, params):
@@ -143,7 +171,8 @@ class RequestHandler:
             raise ValueError("resource_id is required")
         offset = params.get("offset", 0)
         length = params.get("length", 0)
-        return self.facade.get_buffer_contents(resource_id, offset, length)
+        event_id = params.get("event_id")
+        return self.facade.get_buffer_contents(resource_id, offset, length, event_id)
 
     def _handle_get_texture_info(self, params):
         """Handle get_texture_info request"""
@@ -161,7 +190,15 @@ class RequestHandler:
         slice_idx = params.get("slice", 0)
         sample = params.get("sample", 0)
         depth_slice = params.get("depth_slice")  # None = full volume
-        return self.facade.get_texture_data(resource_id, mip, slice_idx, sample, depth_slice)
+        event_id = params.get("event_id")
+        return self.facade.get_texture_data(
+            resource_id,
+            mip,
+            slice_idx,
+            sample,
+            depth_slice,
+            event_id,
+        )
 
     def _handle_get_pipeline_state(self, params):
         """Handle get_pipeline_state request"""
@@ -169,6 +206,46 @@ class RequestHandler:
         if event_id is None:
             raise ValueError("event_id is required")
         return self.facade.get_pipeline_state(int(event_id))
+
+    def _handle_get_event_insight(self, params):
+        """Handle get_event_insight request"""
+        event_id = params.get("event_id")
+        if event_id is None:
+            raise ValueError("event_id is required")
+        include_shader_disassembly = params.get("include_shader_disassembly", False)
+        include_shader_constants = params.get("include_shader_constants", False)
+        max_resources_per_stage = int(params.get("max_resources_per_stage", 8))
+        max_cbuffer_variables = int(params.get("max_cbuffer_variables", 24))
+        disassembly_char_limit = int(params.get("disassembly_char_limit", 24000))
+        return self.facade.get_event_insight(
+            int(event_id),
+            include_shader_disassembly=include_shader_disassembly,
+            include_shader_constants=include_shader_constants,
+            max_resources_per_stage=max_resources_per_stage,
+            max_cbuffer_variables=max_cbuffer_variables,
+            disassembly_char_limit=disassembly_char_limit,
+        )
+
+    def _handle_get_frame_digest(self, params):
+        """Handle get_frame_digest request"""
+        max_hotspots = int(params.get("max_hotspots", 12))
+        max_markers = int(params.get("max_markers", 12))
+        marker_filter = params.get("marker_filter")
+        event_id_min = params.get("event_id_min")
+        event_id_max = params.get("event_id_max")
+        include_event_insights = bool(params.get("include_event_insights", False))
+        event_insight_budget = int(params.get("event_insight_budget", 3))
+        max_resources_per_stage = int(params.get("max_resources_per_stage", 8))
+        return self.facade.get_frame_digest(
+            max_hotspots=max_hotspots,
+            max_markers=max_markers,
+            marker_filter=marker_filter,
+            event_id_min=event_id_min,
+            event_id_max=event_id_max,
+            include_event_insights=include_event_insights,
+            event_insight_budget=event_insight_budget,
+            max_resources_per_stage=max_resources_per_stage,
+        )
 
     def _handle_list_captures(self, params):
         """Handle list_captures request"""
